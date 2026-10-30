@@ -8,8 +8,10 @@ from torch.utils.data import DataLoader
 from model import create_cnn
 
 # ---------- CONFIG ----------
+#model name
 MODEL_PATH = "gesture_cnn.pth"
-OUTPUT_PATH = "gesture_cnn_finetuned_0_to_9_z.pth"
+#fine tune model name
+OUTPUT_PATH = "gesture_cnn_finetuned.pth"
 
 EPOCHS = 50
 BATCH_SIZE = 32
@@ -80,12 +82,12 @@ val_transform = transforms.Compose([
 
 # ---------- LOAD DATASETS ----------
 train_dataset = datasets.ImageFolder(
-    "webcam_dataset/train",
+    "finetune_dataset/train",
     transform=train_transform
 )
 
 val_dataset = datasets.ImageFolder(
-    "webcam_dataset/val",
+    "finetune_dataset/val",
     transform=val_transform
 )
 

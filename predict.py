@@ -12,6 +12,7 @@ device = torch.device(
 
 # Load checkpoint
 checkpoint = torch.load(
+    #load model name
     "gesture_cnn.pth",
     map_location=device,
     weights_only=True

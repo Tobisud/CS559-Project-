@@ -3,8 +3,10 @@ from pathlib import Path
 import random
 import shutil
 
-source = Path("webcam_captures")
-destination = Path("webcam_dataset")
+#source folder
+source = Path("asl_dataset")
+#filtered data folder
+destination = Path("dataset")
 
 random.seed(42)
 

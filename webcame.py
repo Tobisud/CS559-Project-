@@ -9,7 +9,7 @@ from torchvision import transforms
 from model import create_cnn
 
 # ---------- CONFIG ----------
-MODEL_PATH = "gesture_cnn_finetuned_0_to_9_z.pth"
+MODEL_PATH = "gesture_cnn.pth"
 HAND_MODEL_PATH = "hand_landmarker.task"
 CONFIDENCE_THRESHOLD = 0.70
 PADDING = 30
