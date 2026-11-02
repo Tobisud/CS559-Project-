@@ -1,0 +1,17 @@
+model: resnet18
+data: C:\Users\ramze\Downloads\asl_dataset\split
+epochs: 20
+batch_size: 32
+lr: 0.001
+backbone_lr: 0.0001
+unfreeze: -1
+no_augment: False
+no_pretrained: False
+workers: 8
+seed: 42
+tag: None
+total_params: 11194980
+trainable_params: 11194980
+best_val_acc: 0.9217
+best_epoch: 15
+train_minutes: 24.4

@@ -1,0 +1,10 @@
+{
+  "arch": "resnet18",
+  "data": "C:\\Users\\ramze\\Downloads\\asl_dataset\\split\\test",
+  "num_images": 7200,
+  "accuracy": 0.9388888888888889,
+  "top5_accuracy": 1.0,
+  "macro_f1": 0.9345400206123495,
+  "ms_per_image": 0.2593704444087861,
+  "device": "cuda"
+}

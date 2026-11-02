@@ -1,0 +1,10 @@
+{
+  "arch": "efficientnet_b0",
+  "data": "C:\\Users\\ramze\\Downloads\\asl_dataset\\split\\test",
+  "num_images": 7200,
+  "accuracy": 0.92625,
+  "top5_accuracy": 0.9886111111111111,
+  "macro_f1": 0.9218088487051962,
+  "ms_per_image": 0.4029313611277353,
+  "device": "cuda"
+}
