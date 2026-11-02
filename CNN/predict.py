@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from torchvision import transforms
 
-from model import create_cnn
+from model import DEFAULT_ARCH, create_cnn
 
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
@@ -20,7 +20,7 @@ checkpoint = torch.load(
 
 classes = checkpoint["classes"]
 
-model = create_cnn(len(classes))
+model = create_cnn(len(classes), arch=checkpoint.get("arch", DEFAULT_ARCH), pretrained=False)
 model.load_state_dict(checkpoint["model_state_dict"])
 model = model.to(device)
 model.eval()

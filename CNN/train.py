@@ -1,224 +1,199 @@
+"""Train a gesture CNN on dataset/train and pick the best epoch on dataset/val.
 
+Examples:
+    python train.py --model efficientnet_b0
+    python train.py --model resnet18
+    python train.py --model mobilenet_v3_small --unfreeze 0 --no-augment --tag mnv3_original
+
+Every run writes to results/<tag>/ (tag defaults to the model name):
+    model.pth            best checkpoint (also stores the model name and classes)
+    history.csv          loss/accuracy per epoch, for the report
+    training_loss.png    loss curves
+    training_accuracy.png
+    run_info.txt         settings, parameter counts, training time
+"""
+
+import argparse
+import copy
+import csv
+import time
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-from model import create_cnn
-import matplotlib.pyplot as plt
-import csv
-import copy
-from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
+
+from model import ARCHS, count_parameters, create_cnn, freeze_bn_stats, get_head
+
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
-# Image preprocessing
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
-])
-
-# Load datasets
-train_dataset = datasets.ImageFolder(
-    root="dataset/train",
-    transform=transform
-)
-
-val_dataset = datasets.ImageFolder(
-    root="dataset/val",
-    transform=transform
-)
-
-test_dataset = datasets.ImageFolder(
-    root="dataset/test",
-    transform=transform
-)
-
-# Create DataLoaders
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=32,
-    shuffle=True
-)
-
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=32,
-    shuffle=False
-)
-
-test_loader = DataLoader(
-    test_dataset,
-    batch_size=32,
-    shuffle=False
-)
-
-print("Classes:", train_dataset.classes)
-print("Number of classes:", len(train_dataset.classes))
-print("Training images:", len(train_dataset))
+def parse_args():
+    p = argparse.ArgumentParser(description="Train a gesture CNN")
+    p.add_argument("--model", default="efficientnet_b0", choices=list(ARCHS))
+    p.add_argument("--data", type=Path, default=Path("dataset"),
+                   help="Folder containing train/ and val/")
+    p.add_argument("--epochs", type=int, default=20)
+    p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--lr", type=float, default=1e-3, help="Learning rate for the new head")
+    p.add_argument("--backbone-lr", type=float, default=1e-4,
+                   help="Learning rate for unfrozen backbone blocks")
+    p.add_argument("--unfreeze", type=int, default=-1,
+                   help="Last N backbone blocks to train: -1 = all (default), 0 = head only")
+    p.add_argument("--no-augment", action="store_true", help="Disable training augmentation")
+    p.add_argument("--no-pretrained", action="store_true", help="Train from random weights")
+    p.add_argument("--workers", type=int, default=2, help="DataLoader worker processes")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--tag", default=None, help="Run name for the output folder")
+    return p.parse_args()
 
 
-device = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
-)
+def build_transforms(augment):
+    eval_tf = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+    ])
+    if not augment:
+        return eval_tf, eval_tf
+    train_tf = transforms.Compose([
+        transforms.Resize((224, 224)),
+        # No horizontal flip: mirroring can change the meaning of some signs.
+        transforms.RandomAffine(degrees=10, translate=(0.10, 0.10), scale=(0.9, 1.1),
+                                fill=(190, 190, 190)),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+        transforms.ToTensor(),
+        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+    ])
+    return train_tf, eval_tf
 
-num_classes = len(train_dataset.classes)
 
-model = create_cnn(num_classes).to(device)
+def run_epoch(model, loader, criterion, device, optimizer=None):
+    training = optimizer is not None
+    if training:
+        model.train()
+        freeze_bn_stats(model)
+    else:
+        model.eval()
 
-criterion = nn.CrossEntropyLoss()
-
-optimizer = torch.optim.Adam(
-    filter(lambda p: p.requires_grad, model.parameters()),
-    lr=0.001
-)
-
-print("Using device:", device)
-
-history = {
-    "train_loss": [],
-    "val_loss": [],
-    "train_acc": [],
-    "val_acc": []
-}
-
-epochs = 20
-best_val_accuracy = -1.0
-best_state = None
-
-for epoch in range(epochs):
-
-    # ---------- TRAINING ----------
-    model.train()
-
-    train_loss_sum = 0.0
-    train_correct = 0
-    train_total = 0
-
-    for images, labels in train_loader:
-        images = images.to(device)
-        labels = labels.to(device)
-
-        optimizer.zero_grad()
-
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-
-        loss.backward()
-        optimizer.step()
-
-        train_loss_sum += loss.item() * labels.size(0)
-        train_correct += (
-            outputs.argmax(1) == labels
-        ).sum().item()
-        train_total += labels.size(0)
-
-    train_loss = train_loss_sum / train_total
-    train_acc = train_correct / train_total
-
-    # ---------- VALIDATION ----------
-    model.eval()
-
-    val_loss_sum = 0.0
-    val_correct = 0
-    val_total = 0
-
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images = images.to(device)
-            labels = labels.to(device)
-
+    loss_sum, correct, total = 0.0, 0, 0
+    with torch.set_grad_enabled(training):
+        for images, labels in loader:
+            images, labels = images.to(device), labels.to(device)
             outputs = model(images)
             loss = criterion(outputs, labels)
-
-            val_loss_sum += loss.item() * labels.size(0)
-            val_correct += (
-                outputs.argmax(1) == labels
-            ).sum().item()
-            val_total += labels.size(0)
-
-    val_loss = val_loss_sum / val_total
-    val_acc = val_correct / val_total
-
-    # ---------- RECORD HISTORY ----------
-    history["train_loss"].append(train_loss)
-    history["val_loss"].append(val_loss)
-    history["train_acc"].append(train_acc)
-    history["val_acc"].append(val_acc)
-
-    print(
-        f"Epoch {epoch+1}/{epochs} | "
-        f"Train Loss: {train_loss:.4f} | "
-        f"Val Loss: {val_loss:.4f} | "
-        f"Train Acc: {train_acc:.2%} | "
-        f"Val Acc: {val_acc:.2%}"
-    )
-
-    # Save best model in memory
-    if val_acc > best_val_accuracy:
-        best_val_accuracy = val_acc
-        best_state = copy.deepcopy(model.state_dict())
-
-# ---------- SAVE MODEL ----------
-torch.save({
-    "model_state_dict": best_state,
-    "classes": train_dataset.classes
-}, "gesture_cnn.pth")
-
-print("Best validation accuracy:", best_val_accuracy)
+            if training:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            loss_sum += loss.item() * labels.size(0)
+            correct += (outputs.argmax(1) == labels).sum().item()
+            total += labels.size(0)
+    return loss_sum / total, correct / total
 
 
-epoch_range = range(1, len(history["train_loss"]) + 1)
+def save_plot(epochs, train_vals, val_vals, ylabel, title, path):
+    plt.figure(figsize=(9, 5))
+    plt.plot(epochs, train_vals, marker="o", label=f"Training {ylabel}")
+    plt.plot(epochs, val_vals, marker="o", label=f"Validation {ylabel}")
+    plt.xlabel("Epoch")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close()
 
-# Graph 1: Training and validation loss
-plt.figure(figsize=(9, 5))
 
-plt.plot(
-    epoch_range,
-    history["train_loss"],
-    marker="o",
-    label="Training Loss"
-)
+def main():
+    args = parse_args()
+    torch.manual_seed(args.seed)
+    run_name = args.tag or args.model
+    out_dir = Path("results") / run_name
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-plt.plot(
-    epoch_range,
-    history["val_loss"],
-    marker="o",
-    label="Validation Loss"
-)
+    train_tf, eval_tf = build_transforms(augment=not args.no_augment)
+    train_dataset = datasets.ImageFolder(args.data / "train", transform=train_tf)
+    val_dataset = datasets.ImageFolder(args.data / "val", transform=eval_tf)
+    assert train_dataset.classes == val_dataset.classes, "train/ and val/ have different classes"
+    classes = train_dataset.classes
 
-plt.xlabel("Epoch")
-plt.ylabel("Cross Entropy Loss")
-plt.title("MobileNetV3 - Training Loss")
-plt.legend()
-plt.grid(True)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
+                              num_workers=args.workers)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
+                            num_workers=args.workers)
 
-plt.savefig("training_loss.png", dpi=300)
-plt.show()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = create_cnn(len(classes), arch=args.model, unfreeze=args.unfreeze,
+                       pretrained=not args.no_pretrained).to(device)
+    total_params, trainable_params = count_parameters(model)
 
-# Graph 2: Training and validation accuracy
-plt.figure(figsize=(9, 5))
+    print(f"Model: {args.model} | device: {device}")
+    print(f"Classes ({len(classes)}): {classes}")
+    print(f"Train images: {len(train_dataset)} | Val images: {len(val_dataset)}")
+    print(f"Parameters: {total_params:,} total, {trainable_params:,} trainable")
 
-plt.plot(
-    epoch_range,
-    history["train_acc"],
-    marker="o",
-    label="Training Accuracy"
-)
+    # Head gets a higher learning rate than the pretrained layers
+    head_ids = {id(p) for p in get_head(model, args.model).parameters()}
+    head_params = [p for p in model.parameters() if p.requires_grad and id(p) in head_ids]
+    backbone_params = [p for p in model.parameters() if p.requires_grad and id(p) not in head_ids]
+    param_groups = [{"params": head_params, "lr": args.lr}]
+    if backbone_params:
+        param_groups.append({"params": backbone_params, "lr": args.backbone_lr})
+    optimizer = torch.optim.Adam(param_groups)
+    criterion = nn.CrossEntropyLoss()
 
-plt.plot(
-    epoch_range,
-    history["val_acc"],
-    marker="o",
-    label="Validation Accuracy"
-)
+    history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+    best_val_acc, best_epoch, best_state = -1.0, 0, None
+    start = time.time()
 
-plt.xlabel("Epoch") 
-plt.ylabel("Accuracy")
-plt.title("MobileNetV3 - Training Accuracy")
-plt.legend()
-plt.grid(True)
+    for epoch in range(1, args.epochs + 1):
+        train_loss, train_acc = run_epoch(model, train_loader, criterion, device, optimizer)
+        val_loss, val_acc = run_epoch(model, val_loader, criterion, device)
 
-plt.savefig("training_accuracy.png", dpi=300)
-plt.show()
+        for key, value in zip(history, (train_loss, val_loss, train_acc, val_acc)):
+            history[key].append(value)
+
+        print(f"Epoch {epoch}/{args.epochs} | Train Loss: {train_loss:.4f} | "
+              f"Val Loss: {val_loss:.4f} | Train Acc: {train_acc:.2%} | Val Acc: {val_acc:.2%}")
+
+        if val_acc > best_val_acc:
+            best_val_acc, best_epoch = val_acc, epoch
+            best_state = copy.deepcopy(model.state_dict())
+
+    train_minutes = (time.time() - start) / 60
+
+    torch.save({
+        "model_state_dict": best_state,
+        "classes": classes,
+        "arch": args.model,
+    }, out_dir / "model.pth")
+
+    with open(out_dir / "history.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["epoch", *history])
+        for i in range(args.epochs):
+            writer.writerow([i + 1, *(history[k][i] for k in history)])
+
+    epochs = range(1, args.epochs + 1)
+    save_plot(epochs, history["train_loss"], history["val_loss"], "Loss",
+              f"{args.model} - Training Loss", out_dir / "training_loss.png")
+    save_plot(epochs, history["train_acc"], history["val_acc"], "Accuracy",
+              f"{args.model} - Training Accuracy", out_dir / "training_accuracy.png")
+
+    with open(out_dir / "run_info.txt", "w") as f:
+        for key, value in vars(args).items():
+            f.write(f"{key}: {value}\n")
+        f.write(f"total_params: {total_params}\ntrainable_params: {trainable_params}\n")
+        f.write(f"best_val_acc: {best_val_acc:.4f}\nbest_epoch: {best_epoch}\n")
+        f.write(f"train_minutes: {train_minutes:.1f}\n")
+
+    print(f"Best validation accuracy: {best_val_acc:.2%} (epoch {best_epoch})")
+    print(f"Saved results to {out_dir}/")
+
+
+if __name__ == "__main__":
+    main()

@@ -28,3 +28,35 @@ Run test.py to test the model with the test set.<br>
 (Or download the gesture_cnn.pth instead)<br>
 <br>
 Run webcame.py to use live camera and test the prediction. <br>
+<br>
+<br>
+Comparing CNN models:<br>
+<br>
+model.py supports: mobilenet_v3_small, resnet18, efficientnet_b0, efficientnet_b2, convnext_tiny<br>
+<br>
+python train.py --model efficientnet_b0<br>
+python train.py --model resnet18<br>
+python train.py --model mobilenet_v3_small<br>
+<br>
+Each run saves to results/&lt;model&gt;/ : model.pth, history.csv, training_loss.png, training_accuracy.png, run_info.txt<br>
+Default is full fine-tuning (all layers train, backbone lr 1e-4, head lr 1e-3) with augmentation.<br>
+<br>
+python test.py --checkpoint results/efficientnet_b0/model.pth<br>
+python test.py --checkpoint results/efficientnet_b0/model.pth --data webcam_test --name webcam<br>
+<br>
+test.py saves confusion matrix, classification report and metrics json (accuracy, top-5, macro F1, ms/image) next to the checkpoint.<br>
+<br>
+Ablations (use --tag so runs don't overwrite each other):<br>
+python train.py --model efficientnet_b0 --unfreeze 0 --tag effb0_frozen  (only last layer trains, like the original)<br>
+python train.py --model efficientnet_b0 --no-augment --tag effb0_noaug<br>
+python train.py --model efficientnet_b0 --lr 3e-4 --backbone-lr 3e-5 --tag effb0_lowlr<br>
+<br>
+To use a new model in webcame.py / predict.py / fine_tune.py, set the model path to results/&lt;model&gt;/model.pth. The model type is read from the checkpoint, and the old gesture_cnn.pth still works.<br>
+<br>
+Note: if training is slow on CPU, try --unfreeze 3 or a smaller --epochs.<br>
+<br>
+Data split (updated):<br>
+data_splitting.py now splits by person by default (train P1-P7, val P8, test P9-P10), so the test set is people the model never saw. Use the RAW images folder (ASL_Raw_Images/asl_dataset).<br>
+python data_splitting.py --source "path\to\ASL_Raw_Images\asl_dataset" --dest "path\to\split"<br>
+python train.py --model resnet18 --data "path\to\split" --workers 8<br>
+Old random split (for comparison only): add --mode random --dest "path\to\split_random"<br>

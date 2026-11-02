@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
-from model import create_cnn
+from model import DEFAULT_ARCH, create_cnn, freeze_bn_stats
 
 # ---------- CONFIG ----------
 #model name
@@ -32,16 +32,11 @@ checkpoint = torch.load(
 
 classes = checkpoint["classes"]
 
-model = create_cnn(num_classes=len(classes))
-model.load_state_dict(checkpoint["model_state_dict"])
-# Unfreeze last 3 CNN feature blocks
-for layer in list(model.features.children())[-3:]:
-    for param in layer.parameters():
-        param.requires_grad = True
+arch = checkpoint.get("arch", DEFAULT_ARCH)
 
-# Make sure classifier is trainable
-for param in model.classifier.parameters():
-    param.requires_grad = True
+# Head + last 3 backbone blocks are trainable (works for every model in model.py)
+model = create_cnn(num_classes=len(classes), arch=arch, unfreeze=3, pretrained=False)
+model.load_state_dict(checkpoint["model_state_dict"])
 model = model.to(device)
 
 # ---------- TRANSFORMS ----------
@@ -148,6 +143,7 @@ best_weights = copy.deepcopy(model.state_dict())
 for epoch in range(EPOCHS):
 
     model.train()
+    freeze_bn_stats(model)
 
     train_loss_sum = 0
     train_correct = 0
@@ -218,7 +214,8 @@ for epoch in range(EPOCHS):
 # ---------- SAVE ----------
 torch.save({
     "model_state_dict": best_weights,
-    "classes": classes
+    "classes": classes,
+    "arch": arch,
 }, OUTPUT_PATH)
 
 print(f"Best validation accuracy: {best_val_acc:.2%}")

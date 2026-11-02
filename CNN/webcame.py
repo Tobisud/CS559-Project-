@@ -6,10 +6,10 @@ import numpy as np
 
 from PIL import Image, ImageOps
 from torchvision import transforms
-from model import create_cnn
+from model import DEFAULT_ARCH, create_cnn
 
 # ---------- CONFIG ----------
-MODEL_PATH = "gesture_cnn.pth"
+MODEL_PATH = "results/resnet18/model.pth"  # original: "gesture_cnn.pth"
 HAND_MODEL_PATH = "hand_landmarker.task"
 CONFIDENCE_THRESHOLD = 0.70
 PADDING = 30
@@ -29,7 +29,7 @@ checkpoint = torch.load(
 
 classes = checkpoint["classes"]
 
-model = create_cnn(len(classes))
+model = create_cnn(len(classes), arch=checkpoint.get("arch", DEFAULT_ARCH), pretrained=False)
 model.load_state_dict(checkpoint["model_state_dict"])
 model = model.to(device)
 model.eval()
