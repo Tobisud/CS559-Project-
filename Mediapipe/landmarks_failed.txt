@@ -1,0 +1,15 @@
+dataset\test\H\P8_H_780.jpg
+dataset\test\H\P8_H_781.jpg
+dataset\test\H\P8_H_785.jpg
+dataset\test\H\P8_H_788.jpg
+dataset\train\H\P8_H_782.jpg
+dataset\train\H\P8_H_783.jpg
+dataset\train\H\P8_H_784.jpg
+dataset\train\H\P8_H_786.jpg
+dataset\train\H\P8_H_787.jpg
+dataset\train\H\P8_H_789.jpg
+dataset\train\H\P8_H_791.jpg
+dataset\train\H\P8_H_792.jpg
+dataset\train\H\P8_H_794.jpg
+dataset\train\H\P8_H_796.jpg
+dataset\val\H\P8_H_778.jpg
